@@ -1,0 +1,15 @@
+# arduino-cli profile — ESP32 Arduino Core を 3.0.3 に固定する
+# 使い方: arduino-cli compile --profile hud303 .
+# (メーカー推奨が 3.0.3。BLEコールバック署名が 3.x 系の途中で変わるため、
+#  「最新」ではなくこの版に固定する)
+#
+# ボードオプションは実機のチップ実測に合わせたもの (2026-11-19 J3Lで確認):
+#   ESP32-S3FH4R2 = Embedded Flash 4MB / Embedded PSRAM 2MB (QSPI)
+#   → FlashSize=4M, PSRAM=enabled(QSPI), PartitionScheme=huge_app
+#     (BLEアプリは既定の1.2MB APPに収まらないため 3MB APP を使う)
+profiles:
+  hud303:
+    fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PSRAM=enabled,FlashSize=4M,PartitionScheme=huge_app
+    platforms:
+      - platform: esp32:esp32 (3.0.3)
+    libraries: []
