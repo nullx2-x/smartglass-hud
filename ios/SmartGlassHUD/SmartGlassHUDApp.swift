@@ -15,6 +15,7 @@ private let statusID  = CBUUID(string: "AC410002-7A01-4B0A-9A9F-8C2A013A0001")
     @Published var authorized = false
     @Published var connectedName = ""
     @Published var mirrorOn = true   // v0.3.3 firmware default: prism (mirrored)
+    @Published var rotation = 3      // v0.3.4 firmware default: left side up for left eye
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var tx: CBCharacteristic?
@@ -67,6 +68,11 @@ private let statusID  = CBUUID(string: "AC410002-7A01-4B0A-9A9F-8C2A013A0001")
     func pair() {
         guard pairingCode.count == 6, pairingCode.allSatisfy(\.isNumber) else { state = "6桁のコードを入力"; return }
         send("PAIR:" + pairingCode)
+    }
+    func cycleRotation() {
+        // v0.3.4: rotate 90 degrees per tap (panel-side steps; watch the HUD and stop at the readable orientation)
+        rotation = (rotation + 1) % 4
+        send("ROT:" + String(rotation))
     }
     func setMirror(_ on: Bool) {
         // v0.3.3: mirror can be changed before pairing/auth (firmware allows it),
@@ -173,6 +179,7 @@ extension HUDCentral: CBPeripheralDelegate {
             } else if value == "AUTH_OK" { self.authorized = true; self.state = "自動再接続完了" }
             else if value == "MIR_OK:1" { self.mirrorOn = true; self.state = "左右反転ON（プリズム用）" }
             else if value == "MIR_OK:0" { self.mirrorOn = false; self.state = "左右反転OFF（直接表示）" }
+            else if value.hasPrefix("ROT_OK:") { self.rotation = Int(value.dropFirst(7)) ?? self.rotation; self.state = "回転を切り替えました（ROT:\(self.rotation)）" }
             else { self.state = value }
         }
     }
@@ -260,6 +267,7 @@ struct QRScannerView: UIViewControllerRepresentable {
                         Text(hud.mirrorOn ? "反転ON：プリズム越しに読む向き" : "反転OFF：画面を直接見る向き")
                         Button("プリズム用に左右反転する") { hud.setMirror(true) }
                         Button("直接表示に戻す") { hud.setMirror(false) }
+                        Button("画面を90°回転させる（現在 ROT:\(hud.rotation)）") { hud.cycleRotation() }
                         Text("HUD本体のBOOTボタンを短く押しても切り替えできます。反転ONのときはQRは表示されず、6桁コードをプリズム越しに読んで入力してください。")
                             .font(.footnote)
                     }
