@@ -1,0 +1,22 @@
+name: SmartGlassHUD
+options:
+  bundleIdPrefix: dev.smartglass
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    IPHONEOS_DEPLOYMENT_TARGET: 16.0
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  SmartGlassHUD:
+    type: application
+    platform: iOS
+    sources:
+      - path: ios/SmartGlassHUD
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.smartglass.hud
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "近くのSmartGlass HUDを探して接続するためにBluetoothを使用します。"
+        INFOPLIST_KEY_NSCameraUsageDescription: "SmartGlass HUDのペアリング用QRコードを読み取るためにカメラを使用します。"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: 1
