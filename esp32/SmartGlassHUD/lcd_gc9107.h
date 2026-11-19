@@ -15,6 +15,7 @@
 
 void lcdInit();
 void lcdSetMirror(bool mirror);                   // HUD反射(プリズム)用: trueでMADCTLにMXを立てて左右反転
+void lcdSetOrientation(uint8_t madctl);           // v0.3.4: MADCTL値を直接設定 (MX/MY/MVの組み合わせで反転+回転)。BGRビットはドライバ側で付与
 void lcdSetBacklight(uint8_t percent);            // 0..100
 void lcdFill(uint16_t color565);                  // 全画面単色
 // ブロック描画 (RGB565ビッグエンディアンのバイト列をそのまま流す)
