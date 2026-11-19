@@ -14,6 +14,7 @@ private let statusID  = CBUUID(string: "AC410002-7A01-4B0A-9A9F-8C2A013A0001")
     @Published var message = "HELLO HUD"
     @Published var authorized = false
     @Published var connectedName = ""
+    @Published var mirrorOn = true   // v0.3.3 firmware default: prism (mirrored)
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var tx: CBCharacteristic?
@@ -66,6 +67,12 @@ private let statusID  = CBUUID(string: "AC410002-7A01-4B0A-9A9F-8C2A013A0001")
     func pair() {
         guard pairingCode.count == 6, pairingCode.allSatisfy(\.isNumber) else { state = "6桁のコードを入力"; return }
         send("PAIR:" + pairingCode)
+    }
+    func setMirror(_ on: Bool) {
+        // v0.3.3: mirror can be changed before pairing/auth (firmware allows it),
+        // so the user can fix the orientation before reading the pairing code.
+        mirrorOn = on
+        send(on ? "MIR:1" : "MIR:0")
     }
     func sendText() {
         guard authorized else { state = "認証してください"; return }
@@ -164,6 +171,8 @@ extension HUDCentral: CBPeripheralDelegate {
                 self.saveToken(token,for:peripheral.identifier)
                 self.authorized = true; self.state = "ペアリング完了"
             } else if value == "AUTH_OK" { self.authorized = true; self.state = "自動再接続完了" }
+            else if value == "MIR_OK:1" { self.mirrorOn = true; self.state = "左右反転ON（プリズム用）" }
+            else if value == "MIR_OK:0" { self.mirrorOn = false; self.state = "左右反転OFF（直接表示）" }
             else { self.state = value }
         }
     }
@@ -246,6 +255,13 @@ struct QRScannerView: UIViewControllerRepresentable {
                                 .keyboardType(.numberPad)
                             Button("コードで接続") { hud.pair() }
                         }
+                    }
+                    Section("画面の向き（プリズム）") {
+                        Text(hud.mirrorOn ? "反転ON：プリズム越しに読む向き" : "反転OFF：画面を直接見る向き")
+                        Button("プリズム用に左右反転する") { hud.setMirror(true) }
+                        Button("直接表示に戻す") { hud.setMirror(false) }
+                        Text("HUD本体のBOOTボタンを短く押しても切り替えできます。反転ONのときはQRは表示されず、6桁コードをプリズム越しに読んで入力してください。")
+                            .font(.footnote)
                     }
                     Section("HUD表示テスト") {
                         TextField("表示テキスト（まず英数字）",text:$hud.message)
