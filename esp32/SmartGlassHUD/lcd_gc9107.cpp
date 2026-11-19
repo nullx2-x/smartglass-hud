@@ -44,6 +44,12 @@ void lcdSetMirror(bool mirror) {
   dat(madctlVal);
 }
 
+void lcdSetOrientation(uint8_t madctl) {
+  madctlVal = madctl | 0x08;  // BGRは常時付与
+  cmd(0x36);
+  dat(madctlVal);
+}
+
 void lcdSetBacklight(uint8_t percent) {
   if (percent > 100) percent = 100;
   ledcWrite(PIN_BL, (uint32_t)percent * 1023 / 100);
@@ -51,14 +57,17 @@ void lcdSetBacklight(uint8_t percent) {
 
 // ウィンドウ設定して RAMWR まで発行 (CSはHIGHに戻す。画素送信は lcdDrawBlock 内で完結)
 static void setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+  // MV (軸交換=90°回転系) の時はカラム/ローのオフセットも入れ替わる
+  uint16_t ox = (madctlVal & 0x20) ? OFFSET_Y : OFFSET_X;
+  uint16_t oy = (madctlVal & 0x20) ? OFFSET_X : OFFSET_Y;
   uint8_t buf[4];
   cmd(0x2A);
-  buf[0] = (x0 + OFFSET_X) >> 8; buf[1] = (x0 + OFFSET_X) & 0xFF;
-  buf[2] = (x1 + OFFSET_X) >> 8; buf[3] = (x1 + OFFSET_X) & 0xFF;
+  buf[0] = (x0 + ox) >> 8; buf[1] = (x0 + ox) & 0xFF;
+  buf[2] = (x1 + ox) >> 8; buf[3] = (x1 + ox) & 0xFF;
   datN(buf, 4);
   cmd(0x2B);
-  buf[0] = (y0 + OFFSET_Y) >> 8; buf[1] = (y0 + OFFSET_Y) & 0xFF;
-  buf[2] = (y1 + OFFSET_Y) >> 8; buf[3] = (y1 + OFFSET_Y) & 0xFF;
+  buf[0] = (y0 + oy) >> 8; buf[1] = (y0 + oy) & 0xFF;
+  buf[2] = (y1 + oy) >> 8; buf[3] = (y1 + oy) & 0xFF;
   datN(buf, 4);
   cmd(0x2C);
 }
