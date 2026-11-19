@@ -1,0 +1,29 @@
+name: Build unsigned IPA for AltStore
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios/**'
+      - 'project.yml'
+      - '.github/workflows/ipa.yml'
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build unsigned app
+        run: |
+          xcodebuild -project SmartGlassHUD.xcodeproj -scheme SmartGlassHUD -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/SmartGlassHUD.app Payload/
+          zip -qr SmartGlassHUD-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartGlassHUD-unsigned-ipa
+          path: SmartGlassHUD-unsigned.ipa
