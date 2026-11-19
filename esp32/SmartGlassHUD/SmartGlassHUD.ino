@@ -1,5 +1,14 @@
 // ============================================================
-// SmartGlass HUD v0.3.3 (GC9107版) — BLE MVP prototype
+// SmartGlass HUD v0.3.4 (GC9107版) — BLE MVP prototype
+// v0.3.4: 上下 (回転) 調整を追加。左眼用試作品に合わせ、プリズム越しの見た目で
+//   「左が上・右が下」になる回転をデフォルトにした。
+//   回転は ROT:0..3 (パネル側: 0=なし / 1=時計回り / 2=180° / 3=反時計回り) で
+//   反転と独立に設定でき、MADCTL表で合成する。プリズム越しの見た目は鏡像合成で
+//   回転方向が逆になるため、見た目時計回り = パネル側 ROT:3 (MADCTL MVのみ 0x28)。
+//   設定経路: BLE ROT:n (未認証可) / USBシリアル ROT:n・ROT:CYCLE /
+//   BOOTダブルタップ (短押し2回で回転を90°進める。反転トグルは2回で相殺される)。
+//   回転は NVS に保存。MV使用時はドライバ側で表示オフセットも入れ替える。
+//
 // v0.3.3: 単眼プリズム試作品向けに「文字が読める」ことを最優先に改良。
 //  6. 左右反転 (MIR) のデフォルトを ON に変更。プリズム/反射板越しで
 //     そのまま文字が読める状態で起動する (NVSに保存済みの設定があればそれを優先)。
@@ -118,6 +127,7 @@ String savedToken, currentText = "READY";
 String pendingText = "";
 bool pending = false;
 bool mirrorMode = false;
+uint8_t rotMode = 3;  // v0.3.4: パネル側回転 (既定3 = プリズム越しで左が上になる向き)
 
 void showLines(const String& top, const String& middle, const String& bottom) {
   fbClear(COL_BLACK);
@@ -155,12 +165,27 @@ void status(const String& s) {
   if (statusChar) { statusChar->setValue(s.c_str()); if (connected) statusChar->notify(); }
   Serial.println(s);
 }
+// 反転×回転 → MADCTL 合成表 (BGRビットはドライバ側で付与するので含めない)
+// rot: 0=なし / 1=パネル時計回り / 2=180° / 3=パネル反時計回り
+static const uint8_t MADCTL_TABLE[2][4] = {
+  {0x00, 0x60, 0xC0, 0xA0},  // mirror OFF
+  {0x40, 0xE0, 0x80, 0x20},  // mirror ON (rot3 = MVのみ: プリズム越しで左が上・右が下)
+};
+void applyOrientation() {
+  lcdSetOrientation(MADCTL_TABLE[mirrorMode ? 1 : 0][rotMode & 3]);
+  fbDirty = true;
+}
+void applyRotation(uint8_t r, bool save) {
+  rotMode = r & 3;
+  if (save) prefs.putUChar("rot", rotMode);
+  applyOrientation();
+  Serial.printf("ROT:%u (madctl=0x%02X)\n", rotMode, MADCTL_TABLE[mirrorMode ? 1 : 0][rotMode] | 0x08);
+}
 // 左右反転の適用 (NVS保存つき)。BLE / シリアル / BOOTボタン共通。
 void applyMirror(bool on, bool save) {
   mirrorMode = on;
   if (save) prefs.putBool("mirror", on);
-  lcdSetMirror(on);
-  fbDirty = true;
+  applyOrientation();
   Serial.println(on ? "MIRROR:ON (prism)" : "MIRROR:OFF (direct)");
 }
 String makeToken() {
@@ -191,6 +216,10 @@ class WriteCallbacks : public BLECharacteristicCallbacks {
       // v0.3.3: 反転は未認証でも可 (コードを読む前に向きを直す必要があるため)
       applyMirror(v == "MIR:1", true);
       status(mirrorMode ? "MIR_OK:1" : "MIR_OK:0");
+    } else if (v.startsWith("ROT:") && v.length() == 5 && v[4] >= '0' && v[4] <= '3') {
+      // v0.3.4: 回転も未認証でも可 (向き合わせはペアリング前に必要)
+      applyRotation(v[4] - '0', true);
+      status("ROT_OK:" + String(rotMode));
     } else if (v.startsWith("PAIR:") && !paired) {
       if (v.substring(5).toInt() == (int)pairingCode) {
         savedToken = makeToken(); prefs.putString("token", savedToken);
@@ -218,12 +247,13 @@ void setup() {
   savedToken = prefs.getString("token", "");
   paired = savedToken.length() == 32;
   mirrorMode = prefs.getBool("mirror", true);  // v0.3.3: 既定ON (プリズム越しで読める向き)
+  rotMode = prefs.getUChar("rot", 3);          // v0.3.4: 既定3 (左眼用: プリズム越しで左が上・右が下)
   pairingCode = 100000 + (esp_random() % 900000);
   genQR();
 
   lcdInit();                       // GC9107 + メーカー初期化列、BL 100%
   lcdSetBacklight(80);             // HUD用途に少し落とす
-  if (mirrorMode) lcdSetMirror(true);
+  applyOrientation();              // 反転×回転を MADCTL に反映
 
   BLEDevice::init("SG-HUD-01");
   server = BLEDevice::createServer();
@@ -240,9 +270,10 @@ void setup() {
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
-  Serial.println("SmartGlass HUD v0.3.3 (GC9107+MIR default) advertising as SG-HUD-01");
+  Serial.println("SmartGlass HUD v0.3.4 (GC9107+MIR+ROT) advertising as SG-HUD-01");
   Serial.println(mirrorMode ? "MIRROR:ON (prism)" : "MIRROR:OFF (direct)");
-  Serial.println("Serial cmds: MIR:1 / MIR:0 / MIR:TOGGLE / CODE / STATUS");
+  Serial.printf("ROT:%u (madctl=0x%02X)\n", rotMode, MADCTL_TABLE[mirrorMode ? 1 : 0][rotMode] | 0x08);
+  Serial.println("Serial cmds: MIR:1 / MIR:0 / MIR:TOGGLE / ROT:0-3 / ROT:CYCLE / CODE / STATUS");
 }
 
 // ---- USBシリアルコマンド (J3Lから表示なしで操作・確認するため) ----
@@ -255,11 +286,15 @@ void handleSerial() {
       if (line == "MIR:1") { applyMirror(true, true); Serial.println("MIR_OK:1"); }
       else if (line == "MIR:0") { applyMirror(false, true); Serial.println("MIR_OK:0"); }
       else if (line == "MIR:TOGGLE") { applyMirror(!mirrorMode, true); Serial.println(mirrorMode ? "MIR_OK:1" : "MIR_OK:0"); }
+      else if (line.startsWith("ROT:") && line.length() == 5 && line[4] >= '0' && line[4] <= '3') {
+        applyRotation(line[4] - '0', true); Serial.printf("ROT_OK:%u\n", rotMode);
+      }
+      else if (line == "ROT:CYCLE") { applyRotation((rotMode + 1) & 3, true); Serial.printf("ROT_OK:%u\n", rotMode); }
       else if (line == "CODE") { Serial.printf("CODE:%06lu\n", (unsigned long)pairingCode); }
       else if (line == "STATUS") {
-        Serial.printf("STATUS v0.3.3 paired=%d connected=%d authorized=%d mirror=%d code=%06lu\n",
+        Serial.printf("STATUS v0.3.4 paired=%d connected=%d authorized=%d mirror=%d rot=%u code=%06lu\n",
                       paired ? 1 : 0, connected ? 1 : 0, authorized ? 1 : 0, mirrorMode ? 1 : 0,
-                      (unsigned long)pairingCode);
+                      rotMode, (unsigned long)pairingCode);
       }
       line = "";
     } else if (line.length() < 64) {
@@ -275,6 +310,7 @@ void loop() {
   static unsigned long pressStart = 0;
   static bool pressing = false;
   static bool resetDone = false;
+  static unsigned long lastTapMs = 0;
   bool btnLow = (digitalRead(0) == LOW);
   unsigned long nowMs = millis();
   if (btnLow && !pressing) {
@@ -287,6 +323,12 @@ void loop() {
     if (!resetDone && dur >= 80 && dur < 2000) {
       applyMirror(!mirrorMode, true);
       status(mirrorMode ? "MIR_OK:1" : "MIR_OK:0");
+      // v0.3.4: ダブルタップ (900ms以内に2回目) で回転を90°進める (反転は2回で相殺)
+      if (nowMs - lastTapMs < 900) {
+        applyRotation((rotMode + 1) & 3, true);
+        status("ROT_OK:" + String(rotMode));
+      }
+      lastTapMs = nowMs;
     }
     resetDone = false;
   }
