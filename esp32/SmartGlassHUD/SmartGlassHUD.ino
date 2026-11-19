@@ -1,5 +1,20 @@
 // ============================================================
-// SmartGlass HUD v0.3.2 (GC9107版) — BLE MVP prototype
+// SmartGlass HUD v0.3.3 (GC9107版) — BLE MVP prototype
+// v0.3.3: 単眼プリズム試作品向けに「文字が読める」ことを最優先に改良。
+//  6. 左右反転 (MIR) のデフォルトを ON に変更。プリズム/反射板越しで
+//     そのまま文字が読める状態で起動する (NVSに保存済みの設定があればそれを優先)。
+//  7. BOOTボタンの短押し (離した時に 80ms〜2秒) で反転をその場でトグル。
+//     BLEも認証も不要。直接画面でQRを読みたい時は短押しで反転OFFに戻せる。
+//     5秒長押しのペアリングリセットは従来通り。
+//  8. MIR:0 / MIR:1 を未認証・未ペアリングでも受け付けるように変更
+//     (表示の向きは機密ではない。ペアリングコードを読む前に反転できる必要があるため)。
+//  9. USBシリアル (115200) からも MIR:0 / MIR:1 / MIR:TOGGLE / CODE / STATUS を
+//    受け付ける。J3L経由で表示が読めなくてもコード確認と反転設定ができる。
+// 10. ペアリング画面: 反転ON (プリズム使用中) の時はQRを出さずコード画面のみ表示
+//     (鏡像QRは直接スキャンできず、トンネル越しスキャンも実用的でないため)。
+//     コードはプリズム越しに読んでスマホへ手入力する。反転OFF時は従来通り
+//     コード画面とQR画面を4秒交互表示。
+//
 // v0.3.2: ペアリング画面にQRコード表示を追加 (コード画面と4秒交互)。
 //   QRペイロード: sghud://pair?c=<6桁コード>&n=SG-HUD-01
 //   iPhone標準カメラでも読める (アプリ側スキャナはIPAフェーズで追加)。
@@ -140,6 +155,14 @@ void status(const String& s) {
   if (statusChar) { statusChar->setValue(s.c_str()); if (connected) statusChar->notify(); }
   Serial.println(s);
 }
+// 左右反転の適用 (NVS保存つき)。BLE / シリアル / BOOTボタン共通。
+void applyMirror(bool on, bool save) {
+  mirrorMode = on;
+  if (save) prefs.putBool("mirror", on);
+  lcdSetMirror(on);
+  fbDirty = true;
+  Serial.println(on ? "MIRROR:ON (prism)" : "MIRROR:OFF (direct)");
+}
 String makeToken() {
   char b[33]; for (int i = 0; i < 32; i++) b[i] = "0123456789abcdef"[esp_random() % 16]; b[32] = 0;
   return String(b);
@@ -164,7 +187,11 @@ class WriteCallbacks : public BLECharacteristicCallbacks {
   // Core 3.0.3: (param付き) onWrite の既定実装が単一引数版へ委譲する。
   void onWrite(BLECharacteristic* c) override {
     String v = c->getValue();
-    if (v.startsWith("PAIR:") && !paired) {
+    if (v == "MIR:0" || v == "MIR:1") {
+      // v0.3.3: 反転は未認証でも可 (コードを読む前に向きを直す必要があるため)
+      applyMirror(v == "MIR:1", true);
+      status(mirrorMode ? "MIR_OK:1" : "MIR_OK:0");
+    } else if (v.startsWith("PAIR:") && !paired) {
       if (v.substring(5).toInt() == (int)pairingCode) {
         savedToken = makeToken(); prefs.putString("token", savedToken);
         paired = true; authorized = true; status("TOKEN:" + savedToken);
@@ -177,12 +204,6 @@ class WriteCallbacks : public BLECharacteristicCallbacks {
     } else if (v.startsWith("TXT:") && authorized) {
       // ASCII MVP。日本語グリフ描画は次フェーズ (v0.3から不変)。
       pendingText = v.substring(4); pending = true; status("TXT_OK");
-    } else if ((v == "MIR:0" || v == "MIR:1") && authorized) {
-      mirrorMode = (v == "MIR:1");
-      prefs.putBool("mirror", mirrorMode);
-      lcdSetMirror(mirrorMode);
-      fbDirty = true;
-      status(mirrorMode ? "MIR_OK:1" : "MIR_OK:0");
     } else if (v == "UNPAIR" && authorized) {
       resetPairing();
     } else status("ERR:UNAUTHORIZED");
@@ -196,7 +217,7 @@ void setup() {
   prefs.begin("smartglass", false);
   savedToken = prefs.getString("token", "");
   paired = savedToken.length() == 32;
-  mirrorMode = prefs.getBool("mirror", false);
+  mirrorMode = prefs.getBool("mirror", true);  // v0.3.3: 既定ON (プリズム越しで読める向き)
   pairingCode = 100000 + (esp_random() % 900000);
   genQR();
 
@@ -219,29 +240,76 @@ void setup() {
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->setScanResponse(true);
   BLEDevice::startAdvertising();
-  Serial.println("SmartGlass HUD v0.3.2 (GC9107+QR) advertising as SG-HUD-01");
+  Serial.println("SmartGlass HUD v0.3.3 (GC9107+MIR default) advertising as SG-HUD-01");
+  Serial.println(mirrorMode ? "MIRROR:ON (prism)" : "MIRROR:OFF (direct)");
+  Serial.println("Serial cmds: MIR:1 / MIR:0 / MIR:TOGGLE / CODE / STATUS");
+}
+
+// ---- USBシリアルコマンド (J3Lから表示なしで操作・確認するため) ----
+void handleSerial() {
+  static String line = "";
+  while (Serial.available()) {
+    char ch = (char)Serial.read();
+    if (ch == '\n' || ch == '\r') {
+      line.trim();
+      if (line == "MIR:1") { applyMirror(true, true); Serial.println("MIR_OK:1"); }
+      else if (line == "MIR:0") { applyMirror(false, true); Serial.println("MIR_OK:0"); }
+      else if (line == "MIR:TOGGLE") { applyMirror(!mirrorMode, true); Serial.println(mirrorMode ? "MIR_OK:1" : "MIR_OK:0"); }
+      else if (line == "CODE") { Serial.printf("CODE:%06lu\n", (unsigned long)pairingCode); }
+      else if (line == "STATUS") {
+        Serial.printf("STATUS v0.3.3 paired=%d connected=%d authorized=%d mirror=%d code=%06lu\n",
+                      paired ? 1 : 0, connected ? 1 : 0, authorized ? 1 : 0, mirrorMode ? 1 : 0,
+                      (unsigned long)pairingCode);
+      }
+      line = "";
+    } else if (line.length() < 64) {
+      line += ch;
+    }
+  }
 }
 
 void loop() {
-  // BOOT を5秒長押しでペアリングトークンを消去 (離すまで再発しない)
+  handleSerial();
+
+  // BOOTボタン: 短押し (離した時 80ms〜2秒) = 左右反転トグル / 5秒長押し = ペアリング消去
   static unsigned long pressStart = 0;
+  static bool pressing = false;
   static bool resetDone = false;
-  if (digitalRead(0) == LOW) {
-    if (!pressStart && !resetDone) pressStart = millis();
-    if (pressStart && millis() - pressStart > 5000) { resetPairing(); resetDone = true; pressStart = 0; fbDirty = true; }
-  } else { pressStart = 0; resetDone = false; }
+  bool btnLow = (digitalRead(0) == LOW);
+  unsigned long nowMs = millis();
+  if (btnLow && !pressing) {
+    pressing = true; pressStart = nowMs; resetDone = false;
+  } else if (btnLow && pressing && !resetDone && nowMs - pressStart > 5000) {
+    resetPairing(); resetDone = true; fbDirty = true;
+  } else if (!btnLow && pressing) {
+    unsigned long dur = nowMs - pressStart;
+    pressing = false;
+    if (!resetDone && dur >= 80 && dur < 2000) {
+      applyMirror(!mirrorMode, true);
+      status(mirrorMode ? "MIR_OK:1" : "MIR_OK:0");
+    }
+    resetDone = false;
+  }
 
   if (pending) { currentText = pendingText; pending = false; fbDirty = true; }
 
   if (!paired) {
-    // 未ペアリング時: コード画面とQR画面を4秒ごとに交互表示
-    static int lastPhase = -1;
-    int phase = (millis() / 4000) % 2;
-    if (phase != lastPhase || fbDirty) {
-      if (phase == 0) showLines("PAIR READY", String(pairingCode), "SCAN QR ->");
-      else showQR();
-      fbFlush();
-      lastPhase = phase;
+    if (mirrorMode) {
+      // プリズム使用中: コード画面のみ (プリズム越しに読んで手入力)。QRは出さない。
+      if (fbDirty) {
+        showLines("PAIR READY", String(pairingCode), "PRISM MODE TAP=QR");
+        fbFlush();
+      }
+    } else {
+      // 直接表示: コード画面とQR画面を4秒ごとに交互表示
+      static int lastPhase = -1;
+      int phase = (millis() / 4000) % 2;
+      if (phase != lastPhase || fbDirty) {
+        if (phase == 0) showLines("PAIR READY", String(pairingCode), "SCAN QR ->");
+        else showQR();
+        fbFlush();
+        lastPhase = phase;
+      }
     }
   } else if (fbDirty) {
     if (!connected) showLines("SMARTGLASS", "WAIT", "BLE advertising");
